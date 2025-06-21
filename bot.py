@@ -2,6 +2,9 @@ import os
 import discord
 from discord.ext import commands
 from flask import Flask
+import threading
+import requests
+import time
 import asyncio
 
 intents = discord.Intents.all()
@@ -28,16 +31,28 @@ async def load_cogs():
             except Exception as e:
                 print(f'❌ Erro ao carregar {filename}: {e}')
 
-# ==== Função principal ====
+# ==== Função auto-ping que roda numa thread e ping no Render a cada 10 minutos ====
+def auto_ping():
+    url = os.getenv('RENDER_EXTERNAL_URL')  # Defina essa variável de ambiente no Render
+    if not url:
+        print("⚠️ Variável RENDER_EXTERNAL_URL não definida. Auto-ping desativado.")
+        return
+    while True:
+        try:
+            requests.get(url)
+            print(f"✅ Auto-ping enviado para: {url}")
+        except Exception as e:
+            print(f"❌ Erro no auto-ping: {e}")
+        time.sleep(600)  # 600 segundos = 10 minutos
+
+# ==== Função principal async para rodar o bot ====
 async def main():
     async with bot:
         await load_cogs()
         await bot.start(os.getenv("DISCORD_TOKEN"))
 
-# ==== Iniciar Flask em thread separada ====
-import threading
-flask_thread = threading.Thread(target=run_flask)
-flask_thread.start()
-
-# ==== Rodar Bot ====
-asyncio.run(main())
+# ==== Iniciar Flask e Auto-ping em threads e rodar bot async ====
+if __name__ == '__main__':
+    threading.Thread(target=run_flask).start()
+    threading.Thread(target=auto_ping).start()
+    asyncio.run(main())

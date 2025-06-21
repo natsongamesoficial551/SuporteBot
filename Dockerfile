@@ -11,4 +11,4 @@ COPY . .
 RUN pip install -r requirements.txt
 
 # Executa o bot
-CMD ["python", "main.py"]
+CMD ["python", "bot.py"]
