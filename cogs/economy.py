@@ -62,9 +62,6 @@ class Economy(commands.Cog):
                 "last_crime": None,
                 "last_rob": None,
                 "streak": 0,
-                "total_earned": 0,
-                "times_robbed": 0,
-                "successful_crimes": 0,
                 "level": 1,
                 "xp": 0
             }
@@ -96,34 +93,216 @@ class Economy(commands.Cog):
         return max(0, int((cooldown - time_passed).total_seconds()))
 
     def format_time(self, seconds):
-        if seconds <= 0:
-            return "Disponível"
         hours, remainder = divmod(seconds, 3600)
         minutes, seconds = divmod(remainder, 60)
-        return f"{hours}h {minutes}m {seconds}s" if hours else f"{minutes}m {seconds}s" if minutes else f"{seconds}s"
+        if hours > 0:
+            return f"{hours}h {minutes}m {seconds}s"
+        elif minutes > 0:
+            return f"{minutes}m {seconds}s"
+        else:
+            return f"{seconds}s"
 
     @commands.command(name='balance', aliases=['bal', 'saldo'])
     async def balance(self, ctx, member: discord.Member = None):
         member = member or ctx.author
         self.ensure_user(member.id)
         user_data = self.data[str(member.id)]
-        bal, bank, total = user_data["balance"], user_data["bank"], user_data["balance"] + user_data["bank"]
-        level, xp = user_data["level"], user_data["xp"]
-        xp_needed = ((level ** 2) * 100) - xp
-
         embed = discord.Embed(title=f"💰 Carteira de {member.display_name}", color=discord.Color.gold())
-        embed.add_field(name="💵 Carteira", value=f"{bal:,} coins", inline=True)
-        embed.add_field(name="🏦 Banco", value=f"{bank:,} coins", inline=True)
-        embed.add_field(name="💎 Total", value=f"{total:,} coins", inline=True)
-        embed.add_field(name="📊 Level", value=f"{level}", inline=True)
-        embed.add_field(name="⭐ XP", value=f"{xp:,}", inline=True)
-        embed.add_field(name="🎯 Próximo Level", value=f"{xp_needed:,} XP", inline=True)
-        if member.avatar:
-            embed.set_thumbnail(url=member.avatar.url)
+        embed.add_field(name="💵 Carteira", value=f"{user_data['balance']} coins")
+        embed.add_field(name="🏦 Banco", value=f"{user_data['bank']} coins")
+        embed.add_field(name="📊 Level", value=f"{user_data['level']}")
+        embed.add_field(name="⭐ XP", value=f"{user_data['xp']}")
         await ctx.reply(embed=embed, mention_author=False)
 
-    # Os outros comandos (daily, work, crime, rob, deposit, withdraw, shop, buy, inventory, xpboard)
-    # continuam IGUAIS como já estavam no seu código, apenas certifique que estejam dentro da classe Economy.
+    @commands.command(name='daily', aliases=['diario'])
+    async def daily(self, ctx):
+        self.ensure_user(ctx.author.id)
+        cooldown = self.get_cooldown_time(ctx.author.id, "daily")
+        if cooldown > 0:
+            await ctx.reply(f"⏰ Você já pegou seu daily! Volte em {self.format_time(cooldown)}", mention_author=False)
+            return
+
+        reward = random.randint(150, 300)
+        user_id = str(ctx.author.id)
+        self.data[user_id]["balance"] += reward
+        self.data[user_id]["last_daily"] = datetime.now().isoformat()
+        self.add_xp(user_id, 20)
+        self.save_data()
+        await ctx.reply(f"🎉 Você ganhou {reward} coins no seu daily!", mention_author=False)
+
+    @commands.command(name='work', aliases=['trabalhar'])
+    async def work(self, ctx):
+        self.ensure_user(ctx.author.id)
+        cooldown = self.get_cooldown_time(ctx.author.id, "work")
+        if cooldown > 0:
+            await ctx.reply(f"😴 Você precisa esperar mais {self.format_time(cooldown)} antes de trabalhar de novo.", mention_author=False)
+            return
+
+        jobs = ["Entregador de Pizza", "Programador", "Mecânico", "Youtuber", "Streamer", "Designer"]
+        job = random.choice(jobs)
+        earnings = random.randint(200, 400)
+        user_id = str(ctx.author.id)
+        self.data[user_id]["balance"] += earnings
+        self.data[user_id]["last_work"] = datetime.now().isoformat()
+        self.add_xp(user_id, 15)
+        self.save_data()
+        await ctx.reply(f"💼 Você trabalhou como **{job}** e ganhou **{earnings} coins**!", mention_author=False)
+
+    @commands.command(name='crime')
+    async def crime(self, ctx):
+        self.ensure_user(ctx.author.id)
+        cooldown = self.get_cooldown_time(ctx.author.id, "crime")
+        user_id = str(ctx.author.id)
+        if cooldown > 0:
+            await ctx.reply(f"🚔 Espere mais {self.format_time(cooldown)} antes de tentar outro crime!", mention_author=False)
+            return
+
+        success = random.random() < 0.6
+        if success:
+            reward = random.randint(300, 600)
+            self.data[user_id]["balance"] += reward
+            msg = f"😈 Você cometeu um crime e ganhou **{reward} coins**!"
+        else:
+            fine = random.randint(150, 300)
+            self.data[user_id]["balance"] = max(0, self.data[user_id]["balance"] - fine)
+            msg = f"🚓 Você foi pego e perdeu **{fine} coins** de multa!"
+
+        self.data[user_id]["last_crime"] = datetime.now().isoformat()
+        self.add_xp(user_id, 10)
+        self.save_data()
+        await ctx.reply(msg, mention_author=False)
+
+    @commands.command(name='rob', aliases=['assaltar'])
+    async def rob(self, ctx, target: discord.Member):
+        if target == ctx.author or target.bot:
+            await ctx.reply("❌ Você não pode roubar essa pessoa!", mention_author=False)
+            return
+
+        self.ensure_user(ctx.author.id)
+        self.ensure_user(target.id)
+        cooldown = self.get_cooldown_time(ctx.author.id, "rob")
+        if cooldown > 0:
+            await ctx.reply(f"⏳ Espere mais {self.format_time(cooldown)} antes de roubar novamente!", mention_author=False)
+            return
+
+        target_balance = self.data[str(target.id)]["balance"]
+        if target_balance < 100:
+            await ctx.reply(f"❌ {target.display_name} não tem dinheiro suficiente para ser roubado!", mention_author=False)
+            return
+
+        success = random.random() < 0.5
+        if success:
+            amount = random.randint(50, min(300, target_balance))
+            self.data[str(ctx.author.id)]["balance"] += amount
+            self.data[str(target.id)]["balance"] -= amount
+            msg = f"💰 Você roubou **{amount} coins** de {target.display_name}!"
+        else:
+            fine = random.randint(100, 200)
+            self.data[str(ctx.author.id)]["balance"] = max(0, self.data[str(ctx.author.id)]["balance"] - fine)
+            msg = f"🚨 Você falhou e perdeu **{fine} coins**!"
+
+        self.data[str(ctx.author.id)]["last_rob"] = datetime.now().isoformat()
+        self.add_xp(ctx.author.id, 20)
+        self.save_data()
+        await ctx.reply(msg, mention_author=False)
+
+    @commands.command(name='deposit', aliases=['dep'])
+    async def deposit(self, ctx, amount: str):
+        self.ensure_user(ctx.author.id)
+        user_id = str(ctx.author.id)
+        if amount.lower() == "all":
+            amount = self.data[user_id]["balance"]
+        else:
+            try:
+                amount = int(amount)
+            except:
+                await ctx.reply("❌ Valor inválido.", mention_author=False)
+                return
+
+        if amount <= 0 or self.data[user_id]["balance"] < amount:
+            await ctx.reply("❌ Saldo insuficiente.", mention_author=False)
+            return
+
+        self.data[user_id]["balance"] -= amount
+        self.data[user_id]["bank"] += amount
+        self.save_data()
+        await ctx.reply(f"🏦 Você depositou **{amount} coins** no banco.", mention_author=False)
+
+    @commands.command(name='withdraw', aliases=['sacar'])
+    async def withdraw(self, ctx, amount: str):
+        self.ensure_user(ctx.author.id)
+        user_id = str(ctx.author.id)
+        if amount.lower() == "all":
+            amount = self.data[user_id]["bank"]
+        else:
+            try:
+                amount = int(amount)
+            except:
+                await ctx.reply("❌ Valor inválido.", mention_author=False)
+                return
+
+        if amount <= 0 or self.data[user_id]["bank"] < amount:
+            await ctx.reply("❌ Saldo insuficiente no banco.", mention_author=False)
+            return
+
+        self.data[user_id]["bank"] -= amount
+        self.data[user_id]["balance"] += amount
+        self.save_data()
+        await ctx.reply(f"💵 Você sacou **{amount} coins** do banco.", mention_author=False)
+
+    @commands.command(name='shop')
+    async def shop(self, ctx):
+        embed = discord.Embed(title="🛒 Loja", color=discord.Color.purple())
+        for emoji, item in self.shop_items.items():
+            embed.add_field(name=f"{emoji} {item['name']}", value=f"{item['description']} - **{item['price']} coins**", inline=False)
+        await ctx.reply(embed=embed, mention_author=False)
+
+    @commands.command(name='buy')
+    async def buy(self, ctx, emoji):
+        self.ensure_user(ctx.author.id)
+        user_id = str(ctx.author.id)
+        if emoji not in self.shop_items:
+            await ctx.reply("❌ Item não encontrado na loja.", mention_author=False)
+            return
+
+        price = self.shop_items[emoji]["price"]
+        if self.data[user_id]["balance"] < price:
+            await ctx.reply("❌ Você não tem dinheiro suficiente.", mention_author=False)
+            return
+
+        self.data[user_id]["balance"] -= price
+        self.data[user_id]["inventory"].append(emoji)
+        self.save_data()
+        await ctx.reply(f"✅ Você comprou **{self.shop_items[emoji]['name']}** por **{price} coins**.", mention_author=False)
+
+    @commands.command(name='inventory', aliases=['inv'])
+    async def inventory(self, ctx):
+        self.ensure_user(ctx.author.id)
+        inv = self.data[str(ctx.author.id)]["inventory"]
+        if not inv:
+            await ctx.reply("🎒 Seu inventário está vazio.", mention_author=False)
+            return
+
+        embed = discord.Embed(title=f"🎒 Inventário de {ctx.author.display_name}", color=discord.Color.blurple())
+        items = {}
+        for item in inv:
+            items[item] = items.get(item, 0) + 1
+
+        for emoji, count in items.items():
+            name = self.shop_items.get(emoji, {}).get("name", "Item desconhecido")
+            embed.add_field(name=f"{emoji} {name}", value=f"Quantidade: {count}", inline=True)
+
+        await ctx.reply(embed=embed, mention_author=False)
+
+    @commands.command(name='xpboard', aliases=['rank', 'xprank'])
+    async def xpboard(self, ctx):
+        top_users = sorted(self.data.items(), key=lambda x: x[1].get("xp", 0), reverse=True)[:10]
+        embed = discord.Embed(title="🏆 Ranking de XP", color=discord.Color.gold())
+        for idx, (user_id, info) in enumerate(top_users, start=1):
+            user = ctx.guild.get_member(int(user_id))
+            name = user.display_name if user else f"Usuário {user_id}"
+            embed.add_field(name=f"{idx}. {name}", value=f"Level: {info['level']} | XP: {info['xp']}", inline=False)
+        await ctx.reply(embed=embed, mention_author=False)
 
 async def setup(bot):
     await bot.add_cog(Economy(bot))
